@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"sync"
 	"time"
 )
 
@@ -25,7 +24,15 @@ func main() {
 
 	// withWait()
 
-	writeWithMutex()
+	// writeWithMutex()
+
+	// nilChannel()
+
+	// unbufferedChannel()
+
+	// bufferedChan()
+
+	baseSelect()
 }
 
 // func printInt(n int) {
@@ -50,24 +57,148 @@ func main() {
 // 	fmt.Println("Exit...")
 // }
 
-func writeWithMutex() {
-	start := time.Now()
-	var wg sync.WaitGroup
-	var mu sync.Mutex // Так создается Mutex. Он дает возможность предоставить эксклюзивные права к какому-либо участку кода только одной горутине
-	var counter int
+// func writeWithMutex() {
+// 	start := time.Now()
+// 	var wg sync.WaitGroup
+// 	var mu sync.Mutex // Так создается Mutex. Он дает возможность предоставить эксклюзивные права к какому-либо участку кода только одной горутине
+// 	var counter int
 
-	for i := 0; i < 1000; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			time.Sleep(time.Nanosecond)
+// 	for i := 0; i < 1000; i++ {
+// 		wg.Add(1)
+// 		go func() {
+// 			defer wg.Done()
+// 			time.Sleep(time.Nanosecond)
 
-			mu.Lock() // Так локается участок кода. Остальные горутины пока не могут получить доступ к этому участку висят в ожидании
-			counter++
-			mu.Unlock() // Так анлокается участок кода и доступ к нему получает опять только одна горутина
-		}()
+// 			mu.Lock() // Так локается участок кода. Остальные горутины пока не могут получить доступ к этому участку висят в ожидании
+// 			counter++
+// 			mu.Unlock() // Так анлокается участок кода и доступ к нему получает опять только одна горутина
+// 		}()
+// 	}
+// 	wg.Wait()
+// 	fmt.Println(counter)
+// 	fmt.Println(time.Now().Sub(start).Seconds())
+// }
+
+// Каналы в Go
+// Каналы нужны для безопасной передачи данных между горутинами
+// Каналы являются более высокоуровневой структурой, потому что они отбрасывают необходимость лочить и разлочить что-то вручную
+// Под капотом каналы выглядят так:
+// type chan struct {
+// 	mx sync.Mutex
+// 	buffer []T
+// 	readers []Goroutines
+// 	writes []Goroutines
+// }
+
+// Применение каналов
+func nilChannel() {
+	var nilChannel chan int // Каналы объявляются с помощью ключевого слова chan, а затем пишется тип данных, который будет передаваться между горутинами
+	// Это nil канал, то есть длина его буфера и capacity равны нулю
+	// Если попытаться записать данные в такой канал или прочитать, то произойдет deadlock, потому что у nil канала нет буфера
+	fmt.Printf("Len: %d Cap: %d\n", len(nilChannel), cap(nilChannel))
+
+	// Таким образом записываеются данные в канал:
+	// nilChannel <- 1 // Запись происходит с использованием оператора <-. Сейчас этот код вызовет deadlock
+
+	// Таким образом можно прочитать данные из канала
+	// <-nilChannel // Также используется оператор <-, но уже слева от самого канала. Этот код в данном случае тоже приведет к deadlock
+
+	// Также каналы можно закрывать:
+	// close(nilChannel) // Но в данном случае также выпадет паника, потому что это nil канал
+}
+
+func unbufferedChannel() {
+	unbufferedChannel := make(chan int) // Так объявляется небуфиризированный канал
+	// Длина и capacity такого канала также будут равны нулю, но с ним уже можно работать
+
+	// При работе с каналом такого типа обязательно нужно, чтобы было две горутины, которые занимают очередь на чтение и запись, потому что иначе выпадет паника и deadlock
+	// unbufferedChannel <- 1
+	// <- unbufferedChannel
+
+	go func(chanForWriting chan<- int) {
+		time.Sleep(time.Second)
+		unbufferedChannel <- 1
+	}(unbufferedChannel)
+
+	value := <-unbufferedChannel
+	fmt.Println(value)
+
+	go func(cnahForReading <-chan int) {
+		time.Sleep(time.Second)
+		value := <-unbufferedChannel
+		fmt.Println(value)
+	}(unbufferedChannel)
+
+	unbufferedChannel <- 2
+
+	// Такой канал можно закрыть и не выпадет паника.
+	// Но если попытаться записать что-то в закрытый канал, то выпадет паника
+	// Также если попытаться закрыть закрытый канал, то тоже выпадет паника.
+
+	// У каналов есть направленность(Только на чтение или запись)
+	// Чтобы строго задать направленность канала, можно при его объявлении написать:
+	// unBufferredChan := make(chan<- int) - Канал только для записи
+	// unBufferredChan := make(<-chan int) - Канал только для чтения
+	// Также можно задать строгую направленность в горутинах, которые используют канал, чтобы сразу была понятна направленность горутины
+}
+
+func bufferedChan() {
+	bufferedChan := make(chan int, 2) // Таким образом объявляется буферизированный канал. У него есть capacity, который был передан вторым аргументом
+
+	fmt.Printf("Len: %d Cap: %d\n", len(bufferedChan), cap(bufferedChan))
+
+	// Главное отличие буферизированного канала от небуферизированного в том, что если попытаться записать данные в канал без явной горутины, которая читает эти данные, то паника не выпадет
+	// Но только пока буфер не заполнен. Если попытаться записать в канал при полном буфере еще что-то и не указать горутину на чтение, то будет deadlock
+	// Также это работает и с чтением, но только deadlock будет, если буфер пустой и нет в очереди горутины на запись
+	bufferedChan <- 1
+	bufferedChan <- 2
+
+	fmt.Printf("Len: %d Cap: %d\n", len(bufferedChan), cap(bufferedChan))
+
+	fmt.Println(<-bufferedChan)
+	fmt.Println(<-bufferedChan)
+
+	fmt.Printf("Len: %d Cap: %d\n", len(bufferedChan), cap(bufferedChan))
+
+}
+
+// Select в работе с каналами
+
+func baseSelect() {
+	buffChannel := make(chan string, 1)
+
+	buffChannel <- "first"
+
+	select { // Select в работе с каналами это то же, что и switch case.
+	// Select распознает три типа операций, блокирующие, неблокирующие и дефолтные
+	case str := <-buffChannel: // В данном случае это неблокирующая операция и будет выполнена она
+		fmt.Println("read", str)
+	case buffChannel <- "second": // Это в данном случае блокирующая операци
+		fmt.Println("write", <-buffChannel, <-buffChannel)
 	}
-	wg.Wait()
-	fmt.Println(counter)
-	fmt.Println(time.Now().Sub(start).Seconds())
+	// Под капотом Select смотрит какой из кейсов неблокирующий и вызывает его
+	// Если, например, оба кейса неблокирующие, то select вызовет один из них рандомно
+	// Если же кейсы только блокирующие и их невозможно выполнить сразу же, то вызывается ветка default
+
+	timer := time.After(time.Second) // time.After это канал, данные в котором появляются по истечении срока, переданного в аргументе
+	// Здесь я выношу его в отдельную переменную, потому что хочу использовать таймер в цикле for, и если не сделать так, то таймер на каждой итерации будет обновляться и никогда не истечет
+
+	resultChan := make(chan int)
+
+	go func() {
+		defer close(resultChan)
+
+		for i := 0; i <= 1000; i++ {
+			select {
+			case <-timer:
+				fmt.Println("Время вышло")
+			default:
+				resultChan <- i
+			}
+		}
+	}()
+
+	for v := range resultChan {
+		fmt.Println(v)
+	}
 }
