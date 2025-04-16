@@ -1,7 +1,10 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"runtime"
+	"sync"
 	"time"
 )
 
@@ -32,7 +35,11 @@ func main() {
 
 	// bufferedChan()
 
-	baseSelect()
+	// baseSelect()
+
+	// baseKnowledge()
+
+	workerPool()
 }
 
 // func printInt(n int) {
@@ -200,5 +207,103 @@ func baseSelect() {
 
 	for v := range resultChan {
 		fmt.Println(v)
+	}
+}
+
+// Контекст
+
+func baseKnowledge() {
+	// Так создается контекст. Контекст нужен, чтобы хранить какие-тоо базовые значения
+	// Например, куки, данные о пользователе и тд
+	ctx := context.Background() // Это бэкграунд контекст
+
+	// toDo := context.TODO() // Такой тип контекста нужен преимущественно для тестирования или для проектирования в функцниях, где будет использоваться контекст
+
+	ctxWithValue := context.WithValue(ctx, "name", "Ilia") // Таким образом можно положить данные в контекст. Нужен родительский контекст, ключ и значение
+	fmt.Println(ctxWithValue.Value("name"))                // Чтобы получить данные из контекста используется функция Value, куда передается ключ
+
+	// !!!
+	// Считается антипаттерном складывать все данные в контекст и затем вызывать их таким образом
+	// !!!
+
+	withCancel, cancel := context.WithCancel(ctx) // Контекст также может сообщать о заврешении какой-либо задачи. Для этого нужно, чтобы контекст мог быть отменен
+	// Чтобы записать контекст с возможностью отмены нужно вызвать метод WithCancel(), который на основе родительского возвращает новый контекст и функцию для отмены
+	fmt.Println(withCancel.Err()) // Сейчас вывод будет nil
+	cancel()                      // Вызываю функцию отмены, которая записалась в переменную cancel
+	fmt.Println(withCancel.Err()) // Теперь вывод будет context canceled
+
+	// !!!
+	/*
+		Считается плохой практикой отменять контекст в каких-либо функциях или на других уровнях отличных от того, где была создана функция отмены
+		Лучше всегда закрывать контекст на одном уровне с его созданием
+	*/
+	// !!!
+
+	// Контекст с возможностью отмены также можно создать с каким-то дедлайном или таймаутом
+	withDeadline, cancel := context.WithDeadline(ctx, time.Now().Add(time.Second*5)) // Дедлайн устанавливается на определенное время. То есть нужно получить время сейчас и добавить к нему желаемое время таймаута
+	defer cancel()
+	fmt.Println(withDeadline.Err())
+	fmt.Println(<-withDeadline.Done())
+
+	// Но лучше работать с контекстом с таймаутом
+	withTimeout, cancel := context.WithTimeout(ctx, time.Second*5) // В это случае нужно просто передать через сколько наступить таймаут без необходимости передачи времени на момент создания контекста
+	defer cancel()
+	fmt.Println(<-withTimeout.Done())
+
+}
+
+// Паттерн использования контекста:
+
+func workerPool() {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	wg := sync.WaitGroup{}
+
+	numbersToProcess, processedNumbers := make(chan int, 5), make(chan int, 5)
+
+	for i := 0; i <= runtime.NumCPU(); i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			worker(ctx, numbersToProcess, processedNumbers)
+		}()
+	}
+
+	go func() {
+		for i := 0; i <= 1000; i++ {
+			numbersToProcess <- i
+		}
+		close(numbersToProcess)
+	}()
+
+	go func() {
+		wg.Wait()
+		close(processedNumbers)
+	}()
+
+	var counter int
+
+	for resultValue := range processedNumbers {
+		counter++
+		fmt.Println(resultValue)
+	}
+
+	fmt.Println(counter)
+
+}
+
+func worker(ctx context.Context, toProcess <-chan int, processed chan<- int) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case value, ok := <-toProcess:
+			if !ok {
+				return
+			}
+			time.Sleep(time.Millisecond)
+			processed <- value * value
+		}
 	}
 }
