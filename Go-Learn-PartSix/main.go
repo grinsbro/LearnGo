@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 )
 
 func main() {
@@ -39,7 +42,17 @@ func main() {
 
 	// baseKnowledge()
 
-	workerPool()
+	// workerPool()
+
+	// chanPromise()
+
+	// withErrGroup()
+
+	// addAtomic()
+
+	// storeLoadSwap()
+
+	compareAndSwap()
 }
 
 // func printInt(n int) {
@@ -306,4 +319,144 @@ func worker(ctx context.Context, toProcess <-chan int, processed chan<- int) {
 			processed <- value * value
 		}
 	}
+}
+
+// Каналы как промисы
+// Имитация онлайн запроса:
+func makeRequest(num int) <-chan string {
+	resultChan := make(chan string)
+
+	go func() {
+		time.Sleep(time.Second)
+		resultChan <- fmt.Sprintf("Запрос номер: %d", num)
+	}()
+	return resultChan
+}
+
+// Теперь делаем "запросы"
+func chanPromise() {
+	firstResponse := makeRequest(1)
+	secondResponse := makeRequest(2)
+
+	// Выполняем какой-то другой код...
+	fmt.Println("Что-то происходит...")
+
+	fmt.Println(<-firstResponse, <-secondResponse)
+}
+
+// Таким образом получается, что каналы могут работать как промисы в JavaScript, то есть мы можем сделать какой-либо запрос, но код все равно продолжит исполняться. А когда нам понадобится резльтат запроса, мы его выведем
+
+// Error Group
+
+func withErrGroup() {
+	errG, ctx := errgroup.WithContext(context.Background()) // Error Group позволяет отлавливать ошибки в горутинах и удалять контекст, если возникла какая-либо ошибка
+	// У Error group есть два метода Go и Wait. Первый позволяет выполнять горутины и отлавливать ошибки. Метод Go принимает в себя анонимную функцию, которая возвращает ошибку. Метод Wait возвращает ошибку и не принимает аргументов
+	errG.Go(func() error {
+		time.Sleep(time.Second)
+
+		select {
+		case <-ctx.Done():
+		default:
+			fmt.Println("Первая задача")
+			time.Sleep(time.Second)
+		}
+		return nil // Можно записывать возврат не внутри select а после выхода из него. Результат будет одинаковым
+	})
+
+	errG.Go(func() error {
+		fmt.Println("Вторая задача")
+		return fmt.Errorf("непредвиденная ошибка во второй задаче") // Имитирую ошибку во время второй горутины
+	})
+
+	errG.Go(func() error {
+		select {
+		case <-ctx.Done():
+		default:
+			fmt.Println("Третья задача")
+		}
+		return nil
+	})
+
+	if err := errG.Wait(); err != nil {
+		fmt.Println(err)
+	}
+}
+
+/*
+Error Group позволяет отменять контекст, если в результате выполнения одной из горутин выпала ошибка
+То есть если создавать ошибку как переменную вручную и в случае ее возникновения записывать данные в каждой из горутин, то они все будут записывать ошибку в ожно и то же место и не будут останавливаться
+Error Group же позволяет отменить контекст и не выполнять другие горутины, если одна вернула ошибку
+Вообще Error Group это больше синтаксический сахар, чем что-то жизненно необходимое
+*/
+
+// Пакет atomic
+/*
+Данный пакет представляет собой более низкоуровневую реализацию методов, которые записаны в пакете sync, частью которого он является.
+Atomic производит вычисления на самом низком уровне, что делает его более высокопроизводительным по сравнению с mutex.
+Но стоит отметить, что atomic позволяет выполнять только одно определенгое действие:
+AddT
+LoadT
+StoreT
+SwapT
+CompareAndSwapT
+В то время как в mutex можно записать более сложную логику
+Примеры:
+*/
+
+func addAtomic() {
+	start := time.Now()
+
+	var (
+		counter int64
+		wg      sync.WaitGroup
+	)
+
+	wg.Add(1000)
+
+	for i := 0; i < 1000; i++ {
+		go func() {
+			defer wg.Done()
+
+			atomic.AddInt64(&counter, 1) // Метод AddT принимает два аргумента - ссылку на переменную, значение которой нужно изменить и дельту, на которую нужно поменять значение
+		}()
+	}
+	wg.Wait()
+	fmt.Println(counter)
+	fmt.Println("Время с атомик: ", time.Since(start).Seconds())
+}
+
+func storeLoadSwap() {
+	var counter int64
+
+	fmt.Println(atomic.LoadInt64(&counter)) // Метод LoadT позволяет получить значение из переменной
+
+	atomic.StoreInt64(&counter, 5) // Метод StoreT позволяет поместить какое-либо значение в переменную, но только того типа, который подходит
+	fmt.Println(atomic.LoadInt64(&counter))
+
+	fmt.Println(atomic.SwapInt64(&counter, 10)) // Метод SwapT позволяет поменять значение в переменной на то, которое нужно, но он возвращает старое значение
+	fmt.Println(atomic.LoadInt64(&counter))
+}
+
+func compareAndSwap() {
+
+	var (
+		counter int64
+		wg      sync.WaitGroup
+	)
+
+	wg.Add(100)
+	for i := 0; i < 100; i++ {
+		go func(i int) {
+			defer wg.Done()
+			if !atomic.CompareAndSwapInt64(&counter, 0, 1) { // Метод CompareAndSwapT возвращает булевое значение и меняет одно значение на другое только если находит значение переданное вторым аргументом
+				return
+			}
+
+			fmt.Println("Процесс завершен горутиной номер:", i)
+		}(i)
+	}
+
+	wg.Wait()
+	fmt.Println(counter)
+
 }
